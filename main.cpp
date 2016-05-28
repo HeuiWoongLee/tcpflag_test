@@ -40,7 +40,7 @@ int main()
 
                 if(ip_header->ip_p == IPPROTO_TCP){
                     struct libnet_tcp_hdr *tcp_header = (struct libnet_tcp_hdr*)(ip_header + 1);
-                    int tcp_hdr_len = tcp_header->th_off * 4; // sizeof(uint32_t) = 4
+                    int tcp_hdr_len = tcp_header->th_off * sizeof(uint32_t);
                     int tcp_data_len = ntohs(ip_header->ip_len) - ip_header->ip_hl * 4 - tcp_hdr_len;
                     u_int8_t* tcp_data = (u_int8_t*)(tcp_header) + tcp_hdr_len;
 
@@ -48,9 +48,27 @@ int main()
                                             tcp_data[1] == 0x45 &&
                                             tcp_data[2] == 0x54 &&
                                             tcp_data[3] == 0x20)){
-                        std::cout<<tcp_data[0]<<tcp_data[1]<<tcp_data[2]<<tcp_data[3]<<std::endl;
-                        //std::cout<<tcp_data_len<<" "<<tcp_hdr_len<<" "<<tcp_data<<std::endl;
-                        std::cout<<"find 'GET ' data\n";
+
+                        u_char fw_rst_buf[sizeof(libnet_ethernet_hdr) + sizeof(libnet_ipv4_hdr) + sizeof(libnet_tcp_hdr)] =  {0,};
+                        libnet_ethernet_hdr* fw_rst_eth = (libnet_ethernet_hdr*)fw_rst_buf;
+                        libnet_ipv4_hdr* fw_rst_ip = (libnet_ipv4_hdr*)(fw_rst_buf + sizeof(libnet_ethernet_hdr));
+                        libnet_tcp_hdr* fw_rst_tcp = (libnet_tcp_hdr*)(fw_rst_ip + 1);
+
+                        memcpy(fw_rst_eth, eth_header, sizeof(libnet_ethernet_hdr));
+
+                        memcpy(fw_rst_ip, ip_header, sizeof(libnet_ipv4_hdr));
+                        fw_rst_ip->ip_tos = 0x77;
+                        fw_rst_ip->ip_len = htons(sizeof(libnet_ipv4_hdr) + sizeof(libnet_tcp_hdr));
+                        fw_rst_ip->ip_ttl = 255;
+
+                        memcpy(fw_rst_tcp, tcp_header, sizeof(libnet_tcp_hdr));
+                        fw_rst_tcp->th_flags = TH_RST;
+                        fw_rst_tcp->th_win = 0;
+
+                        if(pcap_sendpacket(handle, (u_char*)fw_rst_buf, sizeof(libnet_ethernet_hdr) + sizeof(libnet_ipv4_hdr) + sizeof(libnet_tcp_hdr)) != 0)
+                            std::cout<<"RST packet error\n";
+
+                        else std::cout<<"Send RST packet\n";
                     }
 
                     //else std::cout<<"No tcp data"<<std::endl;
