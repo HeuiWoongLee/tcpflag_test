@@ -5,6 +5,64 @@
 #include <libnet.h>
 #include <iostream>
 
+u_int16_t ip_checksum(libnet_ipv4_hdr* ipHdr)
+{
+    int i;
+    u_int32_t sum = 0;
+    u_int16_t *p;
+
+    p = (uint16_t*)(ipHdr);
+
+    for(i = 0; i < (int)sizeof(libnet_ipv4_hdr) / 2; i++){
+        sum += ntohs(*p);
+        p++;
+    }
+
+    sum -= ntohs(ipHdr->ip_sum);
+
+    while(sum >> 16){
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    sum = ~sum;
+
+    return (u_int16_t)sum;
+}
+
+u_int16_t tcp_checksum(libnet_ipv4_hdr* ipHdr, libnet_tcp_hdr* tcpHdr)
+{
+    int i, tcpHdrDataLen;
+    u_int32_t src, dst, sum;
+    u_int16_t *p;
+
+    tcpHdrDataLen = ntohs(ipHdr->ip_len) - sizeof(libnet_ipv4_hdr);
+    sum = 0;
+
+    p = (u_int16_t*)tcpHdr;
+
+    for(i = 0; i < tcpHdrDataLen / 2; i++){
+        sum += htons(*p);
+        p++;
+    }
+
+    if((tcpHdrDataLen / 2) * 2 != tcpHdrDataLen) sum += (htons(*p) & 0xFF00);
+
+    sum -= ntohs(tcpHdr->th_sum);
+    src = atoi(inet_ntoa(ipHdr->ip_src));
+    sum += ((src & 0xFFFF0000) >> 16) + (src & 0x0000FFFF);
+    dst = atoi(inet_ntoa(ipHdr->ip_dst));
+    sum += ((dst & 0xFFFF0000) >> 16) + (dst & 0x0000FFFF);
+    sum += (u_int32_t)(tcpHdrDataLen) + IPPROTO_TCP;
+
+    while(sum >> 16){
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    sum = ~sum;
+
+    return (u_int16_t)sum;
+}
+
 int main()
 {
     char *dev, errbuf[PCAP_ERRBUF_SIZE];
@@ -46,8 +104,8 @@ int main()
 
                     if(tcp_data_len > 0 && (tcp_data[0] == 0x47 &&
                                             tcp_data[1] == 0x45 &&
-                                            tcp_data[2] == 0x54/* &&
-                                            tcp_data[3] == 0x20*/)){
+                                            tcp_data[2] == 0x54 &&
+                                            tcp_data[3] == 0x20)){
 
                         u_char fw_rst_buf[sizeof(libnet_ethernet_hdr) + sizeof(libnet_ipv4_hdr) + sizeof(libnet_tcp_hdr)] =  {0,};
                         libnet_ethernet_hdr* fw_rst_eth = (libnet_ethernet_hdr*)fw_rst_buf;
@@ -61,11 +119,16 @@ int main()
                         fw_rst_ip->ip_tos = 0x44;
                         fw_rst_ip->ip_len = htons(sizeof(libnet_ipv4_hdr) + sizeof(libnet_tcp_hdr));
                         fw_rst_ip->ip_ttl = 255;
+                        fw_rst_ip->ip_sum = 0;
 
                         memcpy(fw_rst_tcp, tcp_header, sizeof(libnet_tcp_hdr));
                         fw_rst_tcp->th_seq = htonl(new_seq);
                         fw_rst_tcp->th_flags = TH_RST;
                         fw_rst_tcp->th_win = 0;
+                        fw_rst_tcp->th_sum = 0;
+
+                        fw_rst_tcp->th_sum = htons(tcp_checksum(fw_rst_ip, fw_rst_tcp));
+                        fw_rst_ip->ip_sum = htons(ip_checksum(fw_rst_ip));
 
                         if(pcap_sendpacket(handle, (u_char*)fw_rst_buf, sizeof(libnet_ethernet_hdr) + sizeof(libnet_ipv4_hdr) + sizeof(libnet_tcp_hdr)) != 0)
                             std::cout<<"RST packet error\n";
